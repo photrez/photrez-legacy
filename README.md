@@ -1,3 +1,11 @@
+> **Frozen archive - read-only.** This is the Tauri-era version of Photrez
+> (Tauri 2 + SolidJS + WebGL2), preserved as a snapshot. It is superseded and receives no
+> further development.
+>
+> The current, actively developed version lives at **https://github.com/photrez/photrez**.
+>
+> Licensed AGPL-3.0-or-later - this repository carries the complete corresponding source.
+
 <p align="center">
   <img src="./logo.svg" width="100" height="100" alt="Photrez Logo" />
 </p>
