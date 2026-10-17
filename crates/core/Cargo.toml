@@ -1,0 +1,69 @@
+[package]
+name = "photrez-core"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Core image editing engine for Photrez"
+repository = "https://github.com/photrez/photrez"
+
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Test-only fixtures for the `.ptz` writer round-trip. Off by default so the
+# fixture JSON is not compiled into the shipped library. `photrez-desktop`
+# enables it from its dev-dependencies only, which (workspace resolver "2")
+# keeps it out of the app build while still letting `save_stream.rs`'s tests
+# import the same fixtures the core tests use.
+ptz-test-fixtures = []
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff"] }
+uuid = { version = "1.7", features = ["v4", "js"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+# Technique A (PoC-A): Rust/WASM owns a WebGPU canvas inside the webview.
+# web-sys exposes the browser's WebGPU API from wasm; enable only the types used
+# (mirrors the proven TS path in apps/desktop/src/lib/gpu/gpuCompute.ts).
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Navigator",
+    "Gpu",
+    "GpuAdapter",
+    "GpuDevice",
+    "GpuQueue",
+    "GpuBuffer",
+    "GpuBufferDescriptor",
+    "GpuBufferBinding",
+    "GpuShaderModule",
+    "GpuShaderModuleDescriptor",
+    "GpuComputePipeline",
+    "GpuComputePipelineDescriptor",
+    "GpuProgrammableStage",
+    "GpuAutoLayoutMode",
+    "GpuBindGroup",
+    "GpuBindGroupDescriptor",
+    "GpuBindGroupLayout",
+    "GpuBindGroupEntry",
+    "GpuCommandEncoder",
+    "GpuComputePassEncoder",
+    "GpuComputePassDescriptor",
+    "GpuCommandBuffer",
+    "GpuSupportedLimits",
+] }
+# Dev-only panic hook so wasm panics surface in the console (used by
+# `set_panic_hook`, compiled only in debug builds).
+console_error_panic_hook = "0.1"
+rkyv = "0.8.18"
+rayon = "1.12.0"
+
+# web-sys exposes WebGPU types only under the `web_sys_unstable_apis` cfg
+# (used by the Technique A PoC in poa.rs). Declare it so the cfg name is known
+# and does not trigger an "unexpected cfg" warning.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(web_sys_unstable_apis)'] }
+

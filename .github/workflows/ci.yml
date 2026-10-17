@@ -1,0 +1,260 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ─── FRONTEND: TypeScript type-check + unit tests + build ───
+  # Multi-OS matrix per Tauri official CI template: the e2e suite runs a real
+  # Chromium (WebGL via SwiftShader on Linux, ANGLE on Windows, Metal on
+  # macOS) so platform-specific WebGL behavior is caught before release.
+  frontend:
+    name: Frontend (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            playwright_cache: '~\AppData\Local\ms-playwright'
+          - os: ubuntu-latest
+            playwright_cache: '~/.cache/ms-playwright'
+          - os: macos-latest
+            playwright_cache: '~/Library/Caches/ms-playwright'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Rust toolchain (WASM target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-pack
+        shell: bash
+        run: VERSION=0.15.0 curl -sSf https://wasm-bindgen.github.io/wasm-pack/installer/init.sh | sh
+
+      - name: Build WASM package
+        working-directory: apps/desktop
+        run: bun run build:wasm
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ${{ matrix.playwright_cache }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install Playwright browsers (Linux)
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: bunx playwright install chromium --with-deps
+
+      - name: Install Playwright browsers (macOS — adds WebKit for e2e)
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        run: bunx playwright install chromium webkit
+
+      - name: Install Playwright browsers
+        if: runner.os != 'Linux' && runner.os != 'macOS'
+        working-directory: apps/desktop
+        run: bunx playwright install chromium
+
+      - name: Type check
+        run: bun run type-check
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Unit tests (node — fast)
+        run: bun run --filter photrez-desktop test:unit
+
+      - name: Build
+        run: bun run build
+
+      - name: E2E (Playwright)
+        run: bun run test:e2e
+
+  # ─── RUST: core crate tests (representative + reliable on CI) ───
+  # NOTE: `photrez-desktop` (Tauri binary) intentionally NOT tested here — its
+  # full build needs a WebView2/windres toolchain that fails on GitHub runners
+  # (pre-existing). Binary compilation is covered by the
+  # release.yml workflow (tauri-action builds all three OS targets).
+  # photrez-core is pure Rust (no WebView2), so the same tests run on all OSes
+  # to catch platform-specific path/behavior drift.
+  rust:
+    name: Rust tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Core tests
+        run: cargo test -p photrez-core
+
+      # Lint gate: `-D warnings` keeps new code clippy-clean; fmt --check
+      # keeps the tree rustfmt-stable (run `cargo fmt` locally when this fails).
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p photrez-core -- -D warnings
+
+      - name: Format check
+        run: cargo fmt --check
+
+  # ─── SECURITY: dependency audit (informational, non-blocking) ───
+  # For a small OSS project the audit runs as a warning, not a hard gate: a
+  # transitive RUSTSEC advisory shouldn't paint every push red. Fixes still
+  # land via Dependabot PRs.
+  security:
+    name: Security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Cargo audit
+        run: cargo audit
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Bun audit (high/critical)
+        # Ignored advisories (pre-existing, transitive-only; last reviewed 2026-10-15):
+        #   GHSA-r28c-9q8g-f849, GHSA-2pvr-wf23-7pc7, GHSA-8hv8-536x-4wqp
+        #   GHSA-vfj7-8cjw-p6xm (braces), GHSA-ch52-4w7c-c8xp (http-cache-semantics)
+        #   Both have NO patched version published — braces' latest is 3.0.3 and
+        #   http-cache-semantics' latest is 4.2.0, which are the vulnerable ones.
+        # Remove the --ignore flags once a patched version is published or the
+        # offending dependency is dropped from the lockfile. Keep this list and
+        # the one in .husky/pre-push identical.
+        run: bun audit --prod --audit-level=high --ignore GHSA-r28c-9q8g-f849 --ignore GHSA-2pvr-wf23-7pc7 --ignore GHSA-8hv8-536x-4wqp --ignore GHSA-vfj7-8cjw-p6xm --ignore GHSA-ch52-4w7c-c8xp
+
+  # ─── COMPONENT TESTS: jsdom-based (now passing — blocks PR) ───
+  component-tests:
+    name: Component tests (jsdom)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Rust toolchain (WASM target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-pack
+        shell: bash
+        run: VERSION=0.15.0 curl -sSf https://wasm-bindgen.github.io/wasm-pack/installer/init.sh | sh
+
+      - name: Build WASM package
+        working-directory: apps/desktop
+        run: bun run build:wasm
+
+      - name: Run component tests
+        working-directory: apps/desktop
+        run: bun run test:component
+
+  # ─── CONTRIBUTIONS: public-artifact terminology guard ───
+  # Machine-enforced rule: public artifacts (commit/PR messages and source) must
+  # NEVER leak internal plan/milestone terminology that lives in gitignored docs
+  # (e.g. "Phase E pilot", "Option A", "flip-on"). Same logic as the local
+  # pre-commit hook, driven from one shared script (scripts/check-public-terminology.sh)
+  # so it cannot diverge between local and CI. PR titles are additionally
+  # validated against Conventional Commits by .github/workflows/lint-pr.yml.
+  contributions:
+    name: Public-artifact terminology guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Scan changed source for internal terminology
+        shell: bash
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          HEAD="${{ github.event.pull_request.head.sha || github.sha }}"
+          # `|| true`: with no changed source files the filter exits 1, which
+          # bash -o pipefail turns into a failed step before the skip branch
+          # below can run. Docs-only and config-only commits must pass.
+          FILES=$(git diff --name-only --diff-filter=ACM "$BASE" "$HEAD" | grep -E '\.(ts|tsx|rs)$' | tr '\n' ' ' || true)
+          if [ -n "$FILES" ]; then
+            sh scripts/check-public-terminology.sh --files "$FILES"
+          else
+            echo "No changed source files matched; terminology scan skipped."
+          fi
+
+      - name: Check PR title for internal terminology
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: sh scripts/check-public-terminology.sh --msg "$PR_TITLE"

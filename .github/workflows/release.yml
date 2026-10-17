@@ -1,0 +1,146 @@
+# Automated releases for Photrez.
+# Triggered by pushing a version tag (e.g. v0.1.0, v1.2.3).
+# Builds native installers on all three platforms and attaches them to the
+# GitHub Release that is created from the tag.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & release (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            # MSI bundling requires a numeric-only product version; pre-release
+            # versions like 0.1.0-alpha.2 are rejected by the msi target. Ship
+            # NSIS only until the version is numeric (stable releases).
+            args: --bundles nsis
+          - os: macos-latest
+            platform: macos
+            args: ""
+          - os: ubuntu-latest
+            platform: linux
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libssl-dev libayatana-appindicator3-dev \
+            libcups2-dev patchelf xdg-utils
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Rust toolchain (WASM target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - name: Install wasm-pack
+        shell: bash
+        run: VERSION=0.15.0 curl -sSf https://wasm-bindgen.github.io/wasm-pack/installer/init.sh | sh
+
+      - name: Build WASM package
+        working-directory: apps/desktop
+        run: bun run build:wasm
+
+      - name: Build & publish with tauri-action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No TAURI_SIGNING_* secrets: this project ships installers without
+          # an auto-updater, so release artifacts are not signed for updates.
+        with:
+          projectPath: apps/desktop
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "Photrez ${{ github.ref_name }}"
+          releaseBody: "See CHANGELOG.md for details."
+          releaseDraft: true
+          prerelease: false
+
+      # Smoke test: verify the build actually produced non-empty installers.
+      # tauri-action fails the job when the binary build fails, but an empty
+      # bundle (misconfigured artifact glob, disk issues) would otherwise
+      # attach 0-byte files to the release unnoticed.
+      # Cargo workspace root is the repo root, so the target dir (and the
+      # bundle output) lives at <repo>/target/release/bundle.
+      - name: Verify release artifacts (smoke test)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_dir="target/release/bundle"
+          if [ ! -d "$bundle_dir" ]; then
+            echo "::error::No bundle directory produced: $bundle_dir"
+            exit 1
+          fi
+          # Installers/binaries must be non-trivial (> 1 MB). macOS .app and
+          # Linux bundle dirs contain the real binary inside a directory tree,
+          # so this find walks the whole bundle.
+          find "$bundle_dir" -type f -size +1M -print | tee /tmp/photrez-artifacts.txt
+          if [ ! -s /tmp/photrez-artifacts.txt ]; then
+            echo "::error::No installer/binary larger than 1 MB found under $bundle_dir"
+            exit 1
+          fi
+
+  # Finalize the draft release once every platform job has attached its
+  # installers: generate SHA-256 checksums (Photrez is not code-signed, so
+  # checksums are the only integrity verification users can do) and replace
+  # the placeholder body with CHANGELOG.md.
+  finalize:
+    name: Attach checksums & release notes
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets
+          gh release download "${{ github.ref_name }}" --dir assets
+
+      - name: Generate SHA256SUMS
+        working-directory: assets
+        run: sha256sum * > SHA256SUMS
+
+      - name: Upload checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" assets/SHA256SUMS --clobber
+
+      - name: Set release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --notes-file CHANGELOG.md

@@ -1,0 +1,203 @@
+# Changelog
+
+All notable changes to Photrez will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once stable releases begin.
+
+## [Unreleased]
+
+Post-`0.1.0` work toward **0.2.0 — The Native Update**.
+
+### Added (complete in `main`; planned for 0.2.0)
+
+- **Text layers** — live, re-editable text with styles and alignment, persisted as non-destructive metadata.
+- **Shape layers** — parametric rectangle, ellipse, line, arrow, and star with fill/stroke controls.
+- **All 12 blend modes** — preview and export parity verified.
+
+### Changed (complete in `main`)
+
+- Rust `photrez-core` is the canonical document, pixel, and history authority; the TypeScript UI keeps a derived view.
+- `.ptz` files are written by the Rust core; current format version is v3 and remains backward-compatible from v0.1.0.
+
+### Performance and quality
+
+- Paint pipeline improvements include raw-byte region transport and frame-level commit slicing.
+- Latest recorded frontend validation (2026-10-14): 393 files, 4,465 passed, 2 expected failures, 1 skipped; type-check and build passed.
+
+### Planned for 0.2.0
+
+- **The Native Update:** replace the shipped Tauri web-view shell with a native Rust UI. This is planned, not yet implemented or released. Installer-size and performance claims will be updated after native-build measurements.
+
+---
+
+## [0.1.0] — 2026-08-06
+
+### 🎉 First Stable Release
+
+`v0.1.0` is the first stable release of the MVP. The `.ptz` document format is backward-compatible from this version onward; any later format change must be additive and ship a migrator (`docs/ptz-migration.md`).
+
+### ✨ Complete Editing Toolkit (MVP)
+- **Tools:** move, selection, crop, eyedropper, brush, eraser, paint bucket, gradient.
+- **Layers & document model:** non-destructive layer stack, blend modes, history (undo/redo).
+- **Workflow:** print settings with paper-size presets, PNG/JPEG/WebP export, `.ptz` project files.
+- **Performance & privacy:** WebGL2 canvas, offline-first, no cloud uploads.
+
+### 🔧 Stability
+- Paper-size fetch failures now degrade gracefully (empty preset list) instead of breaking the print inspector — fixed unhandled rejection that failed the full component-test suite.
+- Full 1517 component-test suite green; `cargo fmt --check` clean; `bun audit --prod --audit-level=high` clean.
+- Component tests no longer flake on slow CI runners (5000ms → 30000ms jsdom timeout).
+
+### ⚡ Performance & Hardening
+
+- Print is roughly 4x faster — A4 composite output drops from 139 MB to 35 MB by capping print DPI at 300, the photo-print standard, with no visible quality loss at normal viewing distance (print-to-PDF is unaffected).
+- Installers upgrade in place — running setup over an existing installation no longer asks to uninstall first.
+- `print_image_raw` validates the raw pixel buffer against its declared dimensions before handing it to the printer — prevents an out-of-bounds read if the two ever disagree.
+- Print size constants now have a single source of truth — no more drift between worker, main thread, and preview.
+
+### 📦 Delivery
+- Windows x64 NSIS installer + `SHA256SUMS`, tagged `v0.1.0` as a GitHub release (not a pre-release).
+- Release notes and download links live at https://github.com/photrez/photrez/releases/tag/v0.1.0.
+
+---
+
+## [0.1.0-beta.1] — 2026-08-03
+
+### ⚠️ Pre-Release Notice
+
+This is the first beta release. It marks the **feature freeze** for the 0.1.0 MVP: the `.ptz` document format is now locked to v1, and no new features will be added until the stable release — only fixes.
+
+### ✨ Added
+
+- Cross-platform pre-release builds: Windows (NSIS), macOS (Apple Silicon DMG), Linux (`.deb`, `.rpm`, `.AppImage`).
+- Print dialog: unlisted paper sizes can now be selected from the paper dropdown.
+
+### 🎨 Changed
+
+- MVP scope frozen (effective `0.1.0-beta.1`).
+- `.ptz` v1 format locked; migration contract documented in `docs/ptz-migration.md`.
+- Command contract spec synced: `supported_commands` now reflects the public frontend subset.
+- Frontend bundle split into vendor chunks (Solid, engine, renderer) to improve load.
+
+### 🐛 Fixed
+
+- Ctrl+P now opens the app's print dialog; the browser's native print dialog no longer interferes.
+- Eraser strokes no longer leave black outline artifacts in the final committed composite.
+- Move tool: dragging at transparent pixels now moves the same layer the panel selects (alpha-aware drag hit-test; previously the drag could target a transparent top layer while the selection fell through to the layer below).
+- Print dialog: the dialog body is now truly full-bleed — the `!p-0` override now wins over the base `px-4 py-4` padding.
+
+### 🧪 Testing
+
+- Beta.1 regression pass: 2687 frontend + 84 Rust core test cases green; type-check and build green.
+
+### 📦 Distribution
+
+- Tagged `v0.1.0-beta.1` as a GitHub pre-release with installers for Windows, macOS, and Linux plus `SHA256SUMS`.
+
+---
+
+## [0.1.0-alpha.2] — 2026-08-01
+
+### ⚠️ Pre-Release Notice
+
+This is an **alpha release** for early testing and feedback. Expect bugs,
+breaking changes, and incomplete features. Not recommended for production use.
+
+### ✨ Added
+
+- Elliptical marquee selection — drag draws an ellipse; copy/cut/delete scope to the ellipse interior; Rect/Ellipse toggle in the option bar (M / Shift+M).
+- Gradient tool — linear + radial, selection-aware, undoable, option bar with type/direction controls.
+- Paint bucket tool — tolerance-based fill, selection-aware, undoable.
+- WASM export encode pilot — `photrez-core` PNG/JPEG/WebP encoders compiled to WebAssembly via `wasm-pack`, wired zero-copy into `exportDocument.ts` with automatic Canvas fallback (parity-tested vs the TypeScript encoder).
+- Move tool improvements — canvas-edge snap boost, locked-layer fallthrough, alpha-aware layer hit-test (transparent pixels pass through to the layer underneath).
+- Eyedropper option bar — HEX readout, copy, auto-copy to clipboard.
+- Print pipeline performance phases 1–3 — native-DPI 1:1 composite, raw `Uint8Array` IPC (no temp file / base64), and a raw-RGBA zero-encode path to GDI.
+- No-layer UX guards — brush/eraser/fill/delete/flip/duplicate/merge/flatten/apply-adjustment now surface a warning toast instead of silently no-op'ing.
+
+### 🎨 Changed
+
+- Splashscreen window removed — the main window shows directly, eliminating the black flash and reducing startup latency; window-state restore now snaps to the primary monitor if the saved position is off-screen.
+- Brush stroke smoothing via coalesced pointer events (stylus / high-Hz pointers produce smooth curves); brush cursor previews the active-layer transform (ellipse + rotation).
+- Crisp pixel editing above 200% zoom — renderer uses `NEAREST` magnification to avoid bilinear blur.
+- History VRAM disposal — evicted/cleared undo snapshots release their `ImageBitmap`s (no GPU memory leak on long sessions).
+- Parallel batch-open for multi-file import; Alt+resize no longer drifts the center; transform resize keeps aspect ratio ON by default (Shift inverts to free-resize).
+- Adjustments sliders debounced (100ms) — slider leads, engine follows; hardcoded accent colors moved to CSS variables.
+- Six silent `console.error` paths converted to `showToast`; option-bar labels standardized.
+
+### 🐛 Fixed
+
+- Background layer no longer reorderable (was reachable via drag).
+- Brush stroke anchor now restored deterministically on undo.
+- Selection move no longer commits ghost history entries on click-only drags.
+- Close button resolution in production webview — dynamic `@vite-ignore` import replaced with a static import.
+
+### 🧪 Testing
+
+- 2683 frontend test cases / 169 files, Rust 171 cases (84 core + 87 desktop); type-check and build green.
+- Test hygiene: `mockUseEditor` helper + typed Tauri/brush/drag mocks (`as any` in tests reduced 483 → 361).
+
+### 📦 Distribution
+
+- Windows MSI / NSIS installer; tagged `v0.1.0-alpha.2` as a GitHub pre-release.
+
+---
+
+## [0.1.0-alpha.1] — 2026-07-19
+
+### ⚠️ Pre-Release Notice
+
+This is an **alpha release** for early testing and feedback. Expect bugs,
+breaking changes, and incomplete features. Not recommended for production use.
+
+### ✨ Added
+
+- Tauri 2 desktop shell with custom title bar, native menu, dialogs, file open/export flows.
+- SolidJS editor UI: tool rail, document tabs, canvas viewport, inspector, layers panel, history panel, navigator, context menus, status bar.
+- Multi-document workspace with cross-document drag-and-drop.
+- Layer operations: create, duplicate, delete, reorder, visibility, lock, opacity, merge down, flatten, blend modes (Normal/Multiply/Screen/Overlay), basic adjustments (brightness/contrast/saturation, non-destructive).
+- Selection: rectangular marquee, invert, cut/copy/paste/delete, move, rotate.
+- Transform: scale, rotate, flip, snapping, keyboard nudges, aspect-ratio constraint.
+- Crop: classic and modern modes, aspect-ratio presets, canvas expansion.
+- Brush and eraser: calibrated round-tip with hardness, flow, smoothing, presets.
+- Eyedropper, color picker, fill shortcuts.
+- Export: PNG, JPEG, WebP with quality settings.
+- Native print dialog integration (Windows).
+- History: undo/redo with VRAM-aware disposal.
+- Save/load project format (`.ptz` — zip archive with document.json + layer PNGs).
+- Window state persistence across launches.
+- WebGL2 renderer with context-loss recovery.
+- Rust `photrez-core` domain crate (reference implementation).
+- Automated frontend tests (2499 cases), Rust tests (113: 84 core + 29 desktop), Playwright E2E specs.
+- Public documentation: architecture, features, PRD, TRD, design system, contributing, security, governance.
+- Help ▸ About dialog shows the current version dynamically (read from `tauri.conf.json` via Tauri `getVersion()`).
+
+### 🐛 Known Issues
+
+Highlights:
+
+- Startup time on cold launch is ~3.7s (target: <2s). Optimization planned for beta.
+- High-zoom canvas preview may appear pixelated due to 4096px backing-buffer clamp.
+- WebGL2 `readPixels` is synchronous — brief hitch possible on first "Apply & Paint" for large layers.
+- macOS and Linux are not yet tested in CI — Windows is the only supported platform for alpha.
+- Blend modes beyond Normal/Multiply/Screen/Overlay are blocked from UI (parity tests pending).
+- Selection is rectangular only (lasso/magic wand not in MVP scope).
+- PSD import is not supported (non-goal for MVP).
+
+### 🔒 Security
+
+- Path-traversal validation: canonicalize + symlink check + extension allowlist (`validate_path_safe`).
+- `delete_file` restricted to the OS temp directory.
+- `print_image` allowlist narrowed to PNG/JPEG (PDF dropped — non-MVP).
+- File-size cap: 256 MB per IPC operation.
+- Project file (`.ptz`) zip-bomb protection: per-entry decompressed size limit.
+- CSP enabled with `script-src 'self'` (no inline scripts).
+
+### 📦 Distribution
+
+- Windows MSI / NSIS installer (built via `bun run tauri build`).
+- Available on GitHub Releases (pre-release flag enabled).
+
+### 🔗 Links
+
+- Source: https://github.com/photrez/photrez
+- Issues: https://github.com/photrez/photrez/issues
+- Security: see SECURITY.md

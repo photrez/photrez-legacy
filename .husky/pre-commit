@@ -1,0 +1,69 @@
+#!/bin/sh
+echo "============================================="
+echo "   Running Pre-Commit Verification Pipeline  "
+echo "============================================="
+
+# 0a. Block internal workflow labels in staged source files
+if git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|rs)$' | xargs grep -ln 'ponytail:' 2>/dev/null | grep -q .; then
+  echo ""
+  echo "ERROR: Internal label pattern detected in staged source files."
+  exit 1
+fi
+
+# 0b. Block internal workflow labels in commit message
+if [ -f ".git/COMMIT_EDITMSG" ] && grep -q 'ponytail:' .git/COMMIT_EDITMSG 2>/dev/null; then
+  echo ""
+  echo "ERROR: Internal label pattern detected in commit message."
+  exit 1
+fi
+
+# 0c. Block internal references from local blocklist (gitignored, internal only)
+if [ -f ".husky/internal-blocklist" ]; then
+  if git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|rs)$' | xargs grep -nFf .husky/internal-blocklist 2>/dev/null | grep -q .; then
+    echo ""
+    echo "ERROR: Internal reference pattern detected in staged source files."
+    exit 1
+  fi
+fi
+
+# 0d. Commit-message terminology check lives in .husky/commit-msg, not here:
+# git runs pre-commit BEFORE it writes .git/COMMIT_EDITMSG, so at this point
+# that file still holds the PREVIOUS commit's message (it blocked every commit
+# whenever the last message contained a banned term). The commit-msg hook gets
+# the new message file as $1 and runs the same shared check on it.
+
+# 0e. Public-artifact terminology guard — staged source
+if git diff --cached --name-only --diff-filter=ACM | grep -qE '\.(ts|tsx|rs)$'; then
+  FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|rs)$' | tr '\n' ' ')
+  sh scripts/check-public-terminology.sh --files "$FILES" || exit 1
+fi
+
+# 1. TypeScript type-check only (faster than full build)
+echo ""
+echo "[1/3] Running TypeScript Type Check..."
+bun run type-check || {
+  echo ""
+  echo "ERROR: TypeScript type check failed!"
+  exit 1
+}
+
+# 2. Frontend unit tests (node-only — fast, ~10s)
+echo ""
+echo "[2/3] Running Frontend Unit Tests..."
+bun run --filter photrez-desktop test:unit || {
+  echo ""
+  echo "ERROR: Frontend unit tests failed!"
+  exit 1
+}
+
+# 3. Rust core unit tests
+echo ""
+echo "[3/3] Running Rust Core Tests..."
+cargo test -p photrez-core || {
+  echo ""
+  echo "ERROR: Rust core tests failed!"
+  exit 1
+}
+
+echo ""
+echo "Pre-commit checks passed. (Build + component tests run on pre-push.)"
